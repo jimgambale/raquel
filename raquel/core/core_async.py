@@ -705,37 +705,45 @@ class AsyncRaquel(BaseRaquel):
             if p.queues:
                 where_clause = (RawJob.queue.in_(p.queues),) + where_clause
 
-            select_oldest_stmt = (
-                select(RawJob)
-                .where(*where_clause)
-                .order_by(RawJob.scheduled_at)
-                .limit(1)
-                .with_for_update(skip_locked=True)
-            )
-            select_oldest_result = await session.execute(select_oldest_stmt)
-            raw_job = select_oldest_result.scalars().first()
-            if not raw_job:
-                logger.debug(f"No job available in queue {queues}")
-            else:
-                # Lock the job
+            while True:
+                select_oldest_stmt = (
+                    select(RawJob)
+                    .where(*where_clause)
+                    .order_by(RawJob.scheduled_at)
+                    .limit(1)
+                    .with_for_update(skip_locked=True)
+                )
+                select_oldest_result = await session.execute(
+                    select_oldest_stmt
+                )
+                raw_job = select_oldest_result.scalars().first()
+                if not raw_job:
+                    logger.debug(f"No job available in queue {queues}")
+                    break
+
+                # Lock the job. Keep the claimable predicate in the UPDATE so
+                # dialects that ignore SELECT FOR UPDATE, including SQLite,
+                # cannot double-claim a row under concurrent workers.
                 update_claim_stmt = (
                     update(RawJob)
-                    .where(RawJob.id == raw_job.id)
+                    .where(RawJob.id == raw_job.id, *where_clause)
                     .values(
                         status=self.CLAIMED,
                         claimed_at=p.now_ms,
                         claimed_by=p.claim_as,
                     )
                 )
-                await session.execute(update_claim_stmt)
-                await session.commit()
-
-                job = Job.from_raw_job(raw_job)
-                job.status = self.CLAIMED
-                job.claimed_at = datetime.fromtimestamp(
-                    p.before_ms / 1000, timezone.utc
-                )
-                job.claimed_by = p.claim_as
+                result = await session.execute(update_claim_stmt)
+                if result.rowcount == 1:
+                    await session.commit()
+                    job = Job.from_raw_job(raw_job)
+                    job.status = self.CLAIMED
+                    job.claimed_at = datetime.fromtimestamp(
+                        p.now_ms / 1000, timezone.utc
+                    )
+                    job.claimed_by = p.claim_as
+                    break
+                await session.rollback()
         return job
 
     async def unclaim(self, job_id: UUID) -> bool:
