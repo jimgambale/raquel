@@ -19,7 +19,7 @@ class RawJob(BaseSQL):
     __tablename__ = "jobs"
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    queue: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    queue: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     payload: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="queued", index=True
@@ -47,7 +47,7 @@ class RawJob(BaseSQL):
     error: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     error_trace: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     claimed_by: Mapped[Optional[str]] = mapped_column(
-        String, nullable=True, index=True
+        String(255), nullable=True, index=True
     )
     claimed_at: Mapped[Optional[int]] = mapped_column(
         BigInteger, nullable=True
